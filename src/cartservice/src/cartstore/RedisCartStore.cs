@@ -14,10 +14,10 @@
 
 using System;
 using System.Linq;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
-using Grpc.Core;
 using Microsoft.Extensions.Caching.Distributed;
-using Google.Protobuf;
 
 namespace cartservice.cartstore
 {
@@ -32,74 +32,56 @@ namespace cartservice.cartstore
 
         public async Task AddItemAsync(string userId, string productId, int quantity)
         {
-            Console.WriteLine($"AddItemAsync called with userId={userId}, productId={productId}, quantity={quantity}");
-
             try
             {
-                Hipstershop.Cart cart;
-                var value = await _cache.GetAsync(userId);
-                if (value == null)
+                var cart = await GetCartAsync(userId);
+                var existingItem = cart.Items.SingleOrDefault(i => i.ProductId == productId);
+                if (existingItem == null)
                 {
-                    cart = new Hipstershop.Cart();
-                    cart.UserId = userId;
-                    cart.Items.Add(new Hipstershop.CartItem { ProductId = productId, Quantity = quantity });
+                    cart.Items.Add(new CartItemSnapshot { ProductId = productId, Quantity = quantity });
                 }
                 else
                 {
-                    cart = Hipstershop.Cart.Parser.ParseFrom(value);
-                    var existingItem = cart.Items.SingleOrDefault(i => i.ProductId == productId);
-                    if (existingItem == null)
-                    {
-                        cart.Items.Add(new Hipstershop.CartItem { ProductId = productId, Quantity = quantity });
-                    }
-                    else
-                    {
-                        existingItem.Quantity += quantity;
-                    }
+                    existingItem.Quantity += quantity;
                 }
-                await _cache.SetAsync(userId, cart.ToByteArray());
+
+                cart.UserId = userId;
+                await _cache.SetAsync(Key(userId), Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cart)));
             }
             catch (Exception ex)
             {
-                throw new RpcException(new Status(StatusCode.FailedPrecondition, $"Can't access cart storage. {ex}"));
+                throw new InvalidOperationException($"Can't access cart storage. {ex.Message}", ex);
             }
         }
 
         public async Task EmptyCartAsync(string userId)
         {
-            Console.WriteLine($"EmptyCartAsync called with userId={userId}");
-
             try
             {
-                var cart = new Hipstershop.Cart();
-                await _cache.SetAsync(userId, cart.ToByteArray());
+                await _cache.RemoveAsync(Key(userId));
             }
             catch (Exception ex)
             {
-                throw new RpcException(new Status(StatusCode.FailedPrecondition, $"Can't access cart storage. {ex}"));
+                throw new InvalidOperationException($"Can't access cart storage. {ex.Message}", ex);
             }
         }
 
-        public async Task<Hipstershop.Cart> GetCartAsync(string userId)
+        public async Task<CartSnapshot> GetCartAsync(string userId)
         {
-            Console.WriteLine($"GetCartAsync called with userId={userId}");
-
             try
             {
-                // Access the cart from the cache
-                var value = await _cache.GetAsync(userId);
-
-                if (value != null)
+                var value = await _cache.GetAsync(Key(userId));
+                if (value == null)
                 {
-                    return Hipstershop.Cart.Parser.ParseFrom(value);
+                    return new CartSnapshot();
                 }
 
-                // We decided to return empty cart in cases when user wasn't in the cache before
-                return new Hipstershop.Cart();
+                var cart = JsonSerializer.Deserialize<CartSnapshot>(Encoding.UTF8.GetString(value));
+                return cart ?? new CartSnapshot();
             }
             catch (Exception ex)
             {
-                throw new RpcException(new Status(StatusCode.FailedPrecondition, $"Can't access cart storage. {ex}"));
+                throw new InvalidOperationException($"Can't access cart storage. {ex.Message}", ex);
             }
         }
 
@@ -114,5 +96,7 @@ namespace cartservice.cartstore
                 return false;
             }
         }
+
+        private static string Key(string userId) => $"cart:{userId}";
     }
 }

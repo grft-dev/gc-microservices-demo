@@ -1,0 +1,15 @@
+{
+  "modules": [
+    "cartservice.dll"
+  ],
+  "types": [
+    {
+      "publicApiType": "cartservice.services.CartService",
+      "methods": [
+        "AddItem",
+        "GetCart",
+        "EmptyCart"
+      ]
+    }
+  ]
+}

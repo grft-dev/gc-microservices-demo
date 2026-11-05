@@ -13,39 +13,64 @@
 // limitations under the License.
 
 using System;
-using System.Threading.Tasks;
-using Grpc.Core;
-using Microsoft.Extensions.Logging;
+using System.Globalization;
+using System.Linq;
 using cartservice.cartstore;
-using Hipstershop;
+using cartservice.Graftcode;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
+using Microsoft.Extensions.Options;
 
 namespace cartservice.services
 {
-    public class CartService : Hipstershop.CartService.CartServiceBase
+    public static class CartService
     {
-        private readonly static Empty Empty = new Empty();
-        private readonly ICartStore _cartStore;
+        public static string AddItem(string userId, string productId, int quantity) =>
+            GraftAsync.Run(async () =>
+            {
+                var store = CreateStore();
+                await store.AddItemAsync(userId, productId, quantity);
 
-        public CartService(ICartStore cartStore)
+                var cart = await store.GetCartAsync(userId);
+                var item = cart.Items.Single(i => i.ProductId == productId);
+                return $"{Escape(item.ProductId)}|{item.Quantity.ToString(CultureInfo.InvariantCulture)}";
+            });
+
+        public static string[] GetCart(string userId) =>
+            GraftAsync.Run(async () =>
+            {
+                var cart = await CreateStore().GetCartAsync(userId);
+                return cart.Items
+                    .OrderBy(item => item.ProductId, StringComparer.Ordinal)
+                    .Select(item => $"{Escape(item.ProductId)}|{item.Quantity.ToString(CultureInfo.InvariantCulture)}")
+                    .ToArray();
+            });
+
+        public static string EmptyCart(string userId) =>
+            GraftAsync.Run(async () =>
+            {
+                await CreateStore().EmptyCartAsync(userId);
+                return string.Empty;
+            });
+
+        private static ICartStore CreateStore()
         {
-            _cartStore = cartStore;
+            var redisAddress = Environment.GetEnvironmentVariable("REDIS_ADDR");
+            IDistributedCache cache;
+            if (string.IsNullOrWhiteSpace(redisAddress))
+            {
+                cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+            }
+            else
+            {
+                cache = new RedisCache(Options.Create(new RedisCacheOptions { Configuration = redisAddress }));
+            }
+
+            return new RedisCartStore(cache);
         }
 
-        public async override Task<Empty> AddItem(AddItemRequest request, ServerCallContext context)
-        {
-            await _cartStore.AddItemAsync(request.UserId, request.Item.ProductId, request.Item.Quantity);
-            return Empty;
-        }
-
-        public override Task<Cart> GetCart(GetCartRequest request, ServerCallContext context)
-        {
-            return _cartStore.GetCartAsync(request.UserId);
-        }
-
-        public async override Task<Empty> EmptyCart(EmptyCartRequest request, ServerCallContext context)
-        {
-            await _cartStore.EmptyCartAsync(request.UserId);
-            return Empty;
-        }
+        private static string Escape(string value) =>
+            value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("|", "\\|", StringComparison.Ordinal);
     }
 }
