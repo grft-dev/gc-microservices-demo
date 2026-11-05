@@ -1,0 +1,29 @@
+services:
+  redis-cart:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  cart-seed:
+    image: redis:7-alpine
+    depends_on:
+      - redis-cart
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until redis-cli -h redis-cart ping; do sleep 1; done
+        redis-cli -h redis-cart ping > /dev/null
+
+  cartservice-graft:
+    build:
+      context: ./src
+      dockerfile: CartService.GraftHost/Dockerfile
+    depends_on:
+      - redis-cart
+      - cart-seed
+    environment:
+      REDIS_ADDR: redis-cart:6379
+    ports:
+      - "8110:80"
+      - "8111:81"
